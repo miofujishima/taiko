@@ -108,6 +108,7 @@ label.f{font-size:11.5px;color:var(--muted);letter-spacing:.06em}
   transition:background .06s,color .06s;user-select:none;-webkit-user-select:none}
 .cell.beat{background:#243953}
 .cell.on{color:#121C29;font-family:"Shippori Mincho",serif}
+.cell.soft{opacity:.5;font-size:11px}
 .cell.gap{margin-right:8px}
 .cell:active{border-color:var(--line2)}
 
@@ -269,6 +270,10 @@ textarea{width:100%;min-height:210px;background:var(--ink2);border:1px solid var
       <label class="f">上げる上限 BPM</label>
       <input type="number" id="rampMax" value="180" min="30" max="400" step="1">
     </div>
+    <div class="card">
+      <label class="f">弱音の音量　<b id="softVal" style="color:var(--beam);font-family:'DM Mono',monospace">50%</b></label>
+      <input type="range" id="softRange" min="10" max="90" step="5" value="50" style="width:100%;accent-color:var(--v1)">
+    </div>
   </div>
 </section>
 
@@ -288,6 +293,7 @@ textarea{width:100%;min-height:210px;background:var(--ink2);border:1px solid var
   <div class="msg" id="ioMsg"></div>
   <div class="hint">
     1マス＝1トークン、スペース区切り。同じマスで複数の音を鳴らすときは <code>ab</code> のように続けて書きます。<code>|</code> は拍の区切りで、読み込み時は無視されます。<br>
+    ドンとタンは弱音を大文字で表します（<code>a</code>＝強、<code>A</code>＝弱）。譜面のマスは押すたびに 強→弱→消 と切り替わります。<br>
     書き出したテキストをそのまま保存しておけば、あとで貼り付けて復元できます。TSVはスプレッドシートにそのまま貼れます（読み込みも同じ形で対応）。
   </div>
   <div class="row" style="margin-top:10px">
@@ -330,8 +336,8 @@ textarea{width:100%;min-height:210px;background:var(--ink2);border:1px solid var
    声（音色）
    ============================================================ */
 const VOICES = [
-  {key:"a", name:"ドン", glyph:"ド", css:"--v1"},
-  {key:"b", name:"タン", glyph:"タ", css:"--v2"},
+  {key:"a", name:"ドン", glyph:"ド", css:"--v1", soft:true},
+  {key:"b", name:"タン", glyph:"タ", css:"--v2", soft:true},
   {key:"c", name:"カ",   glyph:"カ", css:"--v3"},
   {key:"d", name:"チャ", glyph:"チ", css:"--v4"},
   {key:"e", name:"合図",  glyph:"ポ", css:"--v5"},
@@ -388,6 +394,7 @@ function bootstrap(){
    音づくり
    ============================================================ */
 let AC = null, noiseBuf = null, master = null;
+let softVol = 0.5;
 
 function initAudio(){
   if (AC) return;
@@ -423,15 +430,16 @@ function tone(t, f0, f1, dur, vol, type){
   o.start(t); o.stop(t + dur + 0.02);
 }
 
-function hit(vi, t){
+function hit(vi, t, soft){
   if (S.muted[vi]) return;
+  const k = soft ? softVol : 1;
   if (vi === 0){                       // ドン（低い胴）
-    tone(t, 190, 62, 0.42, 0.85);
-    tone(t, 320, 110, 0.10, 0.22, "triangle");
-    noise(t, 0.05, 260, 0.7, 0.30, "lowpass");
+    tone(t, 190, 62, 0.42, 0.85 * k);
+    tone(t, 320, 110, 0.10, 0.22 * k, "triangle");
+    noise(t, 0.05, 260, 0.7, 0.30 * k, "lowpass");
   } else if (vi === 1){                // タン（高い胴）
-    tone(t, 420, 150, 0.20, 0.62);
-    noise(t, 0.04, 900, 1.0, 0.24);
+    tone(t, 420, 150, 0.20, 0.62 * k);
+    noise(t, 0.04, 900, 1.0, 0.24 * k);
   } else if (vi === 2){                // カ（縁）
     noise(t, 0.055, 2400, 2.6, 0.55);
     tone(t, 1500, 900, 0.035, 0.16, "square");
@@ -557,7 +565,7 @@ function scheduler(){
     if (!p){ stop(); return; }
     const n = stepsOf(p);
     if (guideOn && stepPos % p.div === 0) countClick(nextTime, stepPos === 0, true);
-    for (let v = 0; v < NV; v++) if (p.grid[v][stepPos]) hit(v, nextTime);
+    for (let v = 0; v < NV; v++){ const g = p.grid[v][stepPos]; if (g) hit(v, nextTime, g === 2); }
     visQ.push({time:nextTime, patId:p.id, step:stepPos, seqPos:seqPos});
     nextTime += (60 / S.bpm) / p.div;
 
@@ -654,7 +662,8 @@ function renderGrid(){
       const on = p.grid[v][i];
       const isBeat = i % p.div === 0;
       const last = (i % p.div === p.div - 1) && i !== n - 1;
-      const cls = "cell" + (isBeat ? " beat" : "") + (on ? " on" : "") + (last ? " gap" : "");
+      const cls = "cell" + (isBeat ? " beat" : "") + (on ? " on" : "")
+        + (on === 2 ? " soft" : "") + (last ? " gap" : "");
       const st = on ? ' style="background:var(' + VOICES[v].css + ')"' : "";
       h += '<div class="' + cls + '"' + st + ' data-v="' + v + '" data-step="' + i + '">'
         + VOICES[v].glyph + '</div>';
@@ -674,7 +683,10 @@ function patToLine(p, rest){
   const out = [];
   for (let i = 0; i < n; i++){
     let t = "";
-    for (let v = 0; v < NV; v++) if (p.grid[v][i]) t += VOICES[v].key;
+    for (let v = 0; v < NV; v++){
+      const g = p.grid[v][i];
+      if (g) t += (g === 2 ? VOICES[v].key.toUpperCase() : VOICES[v].key);
+    }
     out.push(t || rest);
     if (i % p.div === p.div - 1 && i !== n - 1) out.push("|");
   }
@@ -685,7 +697,10 @@ function patToKuchi(p){
   const out = [];
   for (let i = 0; i < n; i++){
     let t = "";
-    for (let v = 0; v < NV; v++) if (p.grid[v][i]) t += VOICES[v].glyph;
+    for (let v = 0; v < NV; v++){
+      const g = p.grid[v][i];
+      if (g) t += (g === 2 ? "(" + VOICES[v].glyph + ")" : VOICES[v].glyph);
+    }
     out.push(t || "�racle");
     if (i % p.div === p.div - 1 && i !== n - 1) out.push("｜");
   }
@@ -747,19 +762,30 @@ document.getElementById("bpmDown").onclick = () => setBpm(S.bpm - 1);
 document.getElementById("songName").oninput = e => S.name = e.target.value;
 document.getElementById("selRest").onchange = renderKuchi;
 document.getElementById("chkGuide").onchange = e => { guideOn = e.target.checked; };
+document.getElementById("softRange").oninput = e => {
+  softVol = (+e.target.value) / 100;
+  document.getElementById("softVal").textContent = e.target.value + "%";
+};
+document.getElementById("softRange").onchange = () => {
+  initAudio(); if (AC.state === "suspended") AC.resume();
+  if (!playing){ hit(0, AC.currentTime + 0.02, false); hit(0, AC.currentTime + 0.42, true); }
+};
 
 document.getElementById("gridWrap").addEventListener("click", e => {
   const c = e.target.closest(".cell");
   if (c){
     const p = curPat(); if (!p) return;
     const v = +c.dataset.v, i = +c.dataset.step;
-    p.grid[v][i] = p.grid[v][i] ? 0 : 1;
-    if (p.grid[v][i]){
-      c.classList.add("on"); c.style.background = "var(" + VOICES[v].css + ")";
+    const cur = p.grid[v][i];
+    const canSoft = !!VOICES[v].soft;
+    const next = canSoft ? (cur === 0 ? 1 : cur === 1 ? 2 : 0) : (cur ? 0 : 1);
+    p.grid[v][i] = next;
+    c.classList.toggle("on", !!next);
+    c.classList.toggle("soft", next === 2);
+    c.style.background = next ? "var(" + VOICES[v].css + ")" : "";
+    if (next){
       initAudio(); if (AC.state === "suspended") AC.resume();
-      if (!playing) hit(v, AC.currentTime + 0.01);
-    } else {
-      c.classList.remove("on"); c.style.background = "";
+      if (!playing) hit(v, AC.currentTime + 0.01, next === 2);
     }
     renderKuchi();
     return;
@@ -782,7 +808,7 @@ function resize(p, beats, div){
       if (!old[v][i]) continue;
       const pos = (i / oldDiv) * div;        // 拍位置を保って割り直す
       const k = Math.round(pos);
-      if (k < n) g[v][k] = 1;
+      if (k < n) g[v][k] = old[v][i];
     }
   }
   p.beats = beats; p.div = div; p.grid = g;
@@ -926,7 +952,7 @@ function toTsv(){
     rows.push(head);
     for (let v = 0; v < NV; v++){
       const r = [VOICES[v].name];
-      for (let i = 0; i < stepsOf(p); i++) r.push(p.grid[v][i] ? "○" : "");
+      for (let i = 0; i < stepsOf(p); i++) r.push(p.grid[v][i] === 2 ? "△" : (p.grid[v][i] ? "○" : ""));
       rows.push(r);
     }
   });
@@ -994,7 +1020,8 @@ function fromText(txt){
         const use = vi >= 0 ? vi : rowV;
         for (let i = 1; i < cells.length && i - 1 < cur.grid[0].length; i++){
           const c = (cells[i]||"").trim();
-          if (c && c !== "-" && c !== "※" && c !== "·") cur.grid[use][i-1] = 1;
+          if (c && c !== "-" && c !== "※" && c !== "·")
+            cur.grid[use][i-1] = (c === "△" && VOICES[use] && VOICES[use].soft) ? 2 : 1;
         }
         rowV = Math.min(NV - 1, use + 1);
         continue;
@@ -1006,8 +1033,9 @@ function fromText(txt){
         if (i >= n) return;
         if (t === "-" || t === "※" || t === "・" || t === "0") return;
         for (const ch of t){
-          const vi = VOICES.findIndex(v => v.key === ch || v.glyph === ch);
-          if (vi >= 0) cur.grid[vi][i] = 1;
+          const lower = ch.toLowerCase();
+          const vi = VOICES.findIndex(v => v.key === lower || v.glyph === ch);
+          if (vi >= 0) cur.grid[vi][i] = (ch !== lower && VOICES[vi].soft) ? 2 : 1;
         }
       });
       continue;
@@ -1132,7 +1160,7 @@ async function renderMix(){
       const n = stepsOf(p), sd = spb / p.div;
       for (let s = 0; s < n; s++){
         if (doGuide && s % p.div === 0) countClick(t, s === 0, true);
-        for (let v = 0; v < NV; v++) if (p.grid[v][s]) hit(v, t);
+        for (let v = 0; v < NV; v++){ const g = p.grid[v][s]; if (g) hit(v, t, g === 2); }
         t += sd;
       }
     });
@@ -1235,7 +1263,8 @@ function settingsSnapshot(){
     guide: document.getElementById("chkGuide").checked,
     rampStep: document.getElementById("rampStep").value,
     rampMax: document.getElementById("rampMax").value,
-    rest: document.getElementById("selRest").value
+    rest: document.getElementById("selRest").value,
+    soft: document.getElementById("softRange").value
   };
 }
 function serialize(){
@@ -1275,7 +1304,7 @@ function restore(){
       const n = p.beats * p.div;
       p.grid = Array.from({length:NV}, (_, v) => {
         const row = (p.grid && p.grid[v]) ? p.grid[v] : [];
-        return Array.from({length:n}, (_, i) => row[i] ? 1 : 0);
+        return Array.from({length:n}, (_, i) => (row[i] === 2 ? 2 : (row[i] ? 1 : 0)));
       });
     });
     const st = d.settings || {};
@@ -1285,6 +1314,11 @@ function restore(){
     if (st.rampStep != null) document.getElementById("rampStep").value = st.rampStep;
     if (st.rampMax != null) document.getElementById("rampMax").value = st.rampMax;
     if (st.rest) document.getElementById("selRest").value = st.rest;
+    if (st.soft){
+      document.getElementById("softRange").value = st.soft;
+      softVol = (+st.soft) / 100;
+      document.getElementById("softVal").textContent = st.soft + "%";
+    }
     document.getElementById("songName").value = S.name;
     return true;
   } catch (e){ return false; }
