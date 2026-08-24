@@ -219,6 +219,7 @@ textarea{width:100%;min-height:210px;background:var(--ink2);border:1px solid var
       <button class="btn sm" id="btnClear">全消し</button>
       <button class="btn sm" id="btnShiftL">←ずらす</button>
       <button class="btn sm" id="btnShiftR">ずらす→</button>
+      <label class="toggle" style="margin-left:auto;font-size:12px"><input type="checkbox" id="chkFollow" checked>演奏中の譜面を表示</label>
     </div>
     <div class="scroller" id="scroller">
       <div class="gridwrap" id="gridWrap">
@@ -595,6 +596,10 @@ function paint(){
   if (cur){
     const p = patById(cur.patId);
     const node = seq[cur.seqPos];
+    if (p && document.getElementById("chkFollow").checked && curPat() && p.id !== curPat().id){
+      const idx = S.patterns.findIndex(x => x.id === p.id);
+      if (idx >= 0){ S.selPat = idx; renderGrid(); renderChips(); }
+    }
     if (p && curPat() && p.id === curPat().id){
       const beam = document.getElementById("beam");
       const el = document.querySelector('.cell[data-step="' + cur.step + '"]');
@@ -604,6 +609,11 @@ function paint(){
         beam.style.left = (el.offsetLeft) + "px";
         beam.style.width = el.offsetWidth + "px";
         beam.style.top = "0px"; beam.style.height = wrap.offsetHeight + "px";
+        // 横に長い譜面でも再生位置が見えるようにする
+        const sc = document.getElementById("scroller");
+        const L = el.offsetLeft, R = L + el.offsetWidth;
+        if (L < sc.scrollLeft + 80) sc.scrollLeft = Math.max(0, L - 80);
+        else if (R > sc.scrollLeft + sc.clientWidth - 20) sc.scrollLeft = R - sc.clientWidth + 20;
       }
     } else {
       document.getElementById("beam").style.display = "none";
@@ -1264,7 +1274,8 @@ function settingsSnapshot(){
     rampStep: document.getElementById("rampStep").value,
     rampMax: document.getElementById("rampMax").value,
     rest: document.getElementById("selRest").value,
-    soft: document.getElementById("softRange").value
+    soft: document.getElementById("softRange").value,
+    follow: document.getElementById("chkFollow").checked
   };
 }
 function serialize(){
@@ -1314,6 +1325,7 @@ function restore(){
     if (st.rampStep != null) document.getElementById("rampStep").value = st.rampStep;
     if (st.rampMax != null) document.getElementById("rampMax").value = st.rampMax;
     if (st.rest) document.getElementById("selRest").value = st.rest;
+    if (st.follow != null) document.getElementById("chkFollow").checked = !!st.follow;
     if (st.soft){
       document.getElementById("softRange").value = st.soft;
       softVol = (+st.soft) / 100;
