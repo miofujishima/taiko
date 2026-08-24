@@ -65,6 +65,11 @@ header{position:sticky;top:0;z-index:40;background:rgba(16,26,40,.94);
 /* ---------- generic ---------- */
 main{max-width:1080px;margin:0 auto;padding:14px 12px}
 section{margin-bottom:22px}
+#scoreSec.pinned{position:sticky;top:var(--htop,58px);z-index:30;
+  background:var(--ink);padding:8px 0 10px;
+  box-shadow:0 14px 20px -14px rgba(0,0,0,.9)}
+#scoreSec.pinned .scroller{max-height:52vh;overflow-y:auto}
+#btnPin.on{background:var(--v2);border-color:var(--v2);color:#1A1206}
 h2{font-family:"Shippori Mincho",serif;font-size:14px;font-weight:600;
   letter-spacing:.22em;color:var(--muted);margin-bottom:9px;
   display:flex;align-items:center;gap:10px}
@@ -200,7 +205,7 @@ textarea{width:100%;min-height:210px;background:var(--ink2);border:1px solid var
 
 <main>
 
-<section>
+<section id="scoreSec" class="pinned">
   <h2>譜面</h2>
   <div class="score">
     <div class="scoretop">
@@ -220,6 +225,7 @@ textarea{width:100%;min-height:210px;background:var(--ink2);border:1px solid var
       <button class="btn sm" id="btnShiftL">←ずらす</button>
       <button class="btn sm" id="btnShiftR">ずらす→</button>
       <label class="toggle" style="margin-left:auto;font-size:12px"><input type="checkbox" id="chkFollow" checked>演奏中の譜面を表示</label>
+      <button class="btn sm on" id="btnPin" title="譜面を上部に固定する">譜面を固定</button>
     </div>
     <div class="scroller" id="scroller">
       <div class="gridwrap" id="gridWrap">
@@ -772,6 +778,18 @@ document.getElementById("bpmDown").onclick = () => setBpm(S.bpm - 1);
 document.getElementById("songName").oninput = e => S.name = e.target.value;
 document.getElementById("selRest").onchange = renderKuchi;
 document.getElementById("chkGuide").onchange = e => { guideOn = e.target.checked; };
+function fitTop(){
+  const h = document.querySelector("header").offsetHeight;
+  document.documentElement.style.setProperty("--htop", h + "px");
+}
+window.addEventListener("resize", fitTop);
+window.addEventListener("orientationchange", fitTop);
+document.getElementById("btnPin").onclick = () => {
+  const sec = document.getElementById("scoreSec");
+  const on = sec.classList.toggle("pinned");
+  document.getElementById("btnPin").classList.toggle("on", on);
+  fitTop();
+};
 document.getElementById("softRange").oninput = e => {
   softVol = (+e.target.value) / 100;
   document.getElementById("softVal").textContent = e.target.value + "%";
@@ -1275,7 +1293,8 @@ function settingsSnapshot(){
     rampMax: document.getElementById("rampMax").value,
     rest: document.getElementById("selRest").value,
     soft: document.getElementById("softRange").value,
-    follow: document.getElementById("chkFollow").checked
+    follow: document.getElementById("chkFollow").checked,
+    pin: document.getElementById("scoreSec").classList.contains("pinned")
   };
 }
 function serialize(){
@@ -1326,6 +1345,10 @@ function restore(){
     if (st.rampMax != null) document.getElementById("rampMax").value = st.rampMax;
     if (st.rest) document.getElementById("selRest").value = st.rest;
     if (st.follow != null) document.getElementById("chkFollow").checked = !!st.follow;
+    if (st.pin != null){
+      document.getElementById("scoreSec").classList.toggle("pinned", !!st.pin);
+      document.getElementById("btnPin").classList.toggle("on", !!st.pin);
+    }
     if (st.soft){
       document.getElementById("softRange").value = st.soft;
       softVol = (+st.soft) / 100;
@@ -1356,6 +1379,8 @@ if (!restore()) { /* 保存が無ければ初期の例題のまま */ }
 setBpm(S.bpm);
 renderAll();
 lastSaved = serialize();
+fitTop();
+window.addEventListener("load", fitTop);
 if (!saveOK){
   document.getElementById("saveNote").textContent =
     "※ この環境では自動保存が使えません。ファイル保存をお使いください。";
