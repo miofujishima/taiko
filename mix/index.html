@@ -272,10 +272,27 @@ textarea{width:100%;min-height:210px;background:var(--ink2);border:1px solid var
     </div>
 
     <canvas id="wave" class="wave"></canvas>
-    <div class="wavehint">波形をタップすると、そこが1小節目の頭になります。赤い線が頭、細い線が小節の区切りです。曲の終わりまで線が波形と合っていれば、テンポが合っています。</div>
+    <div class="wavehint">波形をタップすると再生位置（赤い線）が動きます。細い線が小節の区切り、黄色い線が各ブロックの頭、薄い線が1小節目の頭です。</div>
+
+    <div class="row" style="margin-top:8px">
+      <button class="btn primary" id="btnPrev">曲だけ再生</button>
+      <span class="f">再生位置 <b id="curTime" class="vval">0:00.000</b></span>
+      <button class="btn sm" data-cur="-1">−1秒</button>
+      <button class="btn sm" data-cur="-0.1">−0.1</button>
+      <button class="btn sm" data-cur="-0.01">−0.01</button>
+      <button class="btn sm" data-cur="0.01">＋0.01</button>
+      <button class="btn sm" data-cur="0.1">＋0.1</button>
+      <button class="btn sm" data-cur="1">＋1秒</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <span class="f">この再生位置を</span>
+      <select id="selBlockSet" style="width:auto"></select>
+      <span class="f">の1小節目の頭にする</span>
+      <button class="btn sm" id="btnSetBlock">設定</button>
+    </div>
 
     <canvas id="zoom" class="zoom"></canvas>
-    <div class="wavehint">拡大（頭の前後1秒）。タップした位置が新しい頭になります。</div>
+    <div class="wavehint">拡大（再生位置の前後1秒）。タップすると再生位置が細かく動きます。</div>
 
     <div class="grid2" style="margin-top:12px">
       <div class="card">
@@ -288,7 +305,7 @@ textarea{width:100%;min-height:210px;background:var(--ink2);border:1px solid var
           <button class="btn sm" data-off="0.1">＋100</button>
           <span class="f">ミリ秒</span>
         </div>
-        <button class="btn sm" id="btnHere" style="margin-top:7px">再生中のいまを頭にする</button>
+        <button class="btn sm" id="btnHere" style="margin-top:7px">再生位置をここにする</button>
       </div>
 
       <div class="card">
@@ -347,7 +364,7 @@ textarea{width:100%;min-height:210px;background:var(--ink2);border:1px solid var
         <button class="btn sm ghost" id="btnClearMap">地図を消す</button>
         <span class="f" id="mapStat">地図はまだありません</span>
       </div>
-      <div class="wavehint">ここは曲全体をまとめて記録するときに使います。ブロックごとの記録は「構成」から、小節の頭だけをたたきます。<br>記録をはじめると曲が頭から流れます。聞きながら拍をたたいてください。地図を使っているあいだは、太鼓はBPMではなくこの地図に従って鳴ります。</div>
+      <div class="wavehint">記録は必ず1小節目の頭からはじめます。ブロックの指定があればその1秒前から、なければ曲の頭から流れます。<br>ここは曲全体をまとめて記録するときに使います。ブロックごとの記録は「構成」から、小節の頭だけをたたきます。<br>記録をはじめると曲が頭から流れます。聞きながら拍をたたいてください。地図を使っているあいだは、太鼓はBPMではなくこの地図に従って鳴ります。</div>
     </div>
 
     <div class="hint">
@@ -928,14 +945,15 @@ function renderBlocks(){
       + '<button class="btn sm ghost" data-bdel="' + bi + '">削除</button>'
       + '</div>'
       + '<div class="blockhead bsync">'
-      + '<span class="f">曲の開始</span>'
+      + '<span class="f">1小節目の頭</span>'
       + '<input class="rep bstart" type="number" step="0.001" min="0" placeholder="未設定" value="'
       + (b.start != null ? (+b.start).toFixed(3) : "") + '" data-bstart="' + bi + '">'
       + '<span class="f">秒</span>'
-      + '<button class="btn sm" data-bnow="' + bi + '" title="再生中のいまをこのブロックの頭にする">いま</button>'
+      + '<button class="btn sm" data-bnow="' + bi + '" title="波形の再生位置をこのブロックの1小節目の頭にする">ここ</button>'
       + '<button class="btn sm" data-bmap="' + bi + '">' + (recBlock === bi ? "記録をおわる" : "小節頭を記録") + '</button>'
       + (b.map && b.map.length > 1 ? '<button class="btn sm ghost" data-bmapdel="' + bi + '">地図消す</button>' : "")
-      + '<span class="f">' + (b.map && b.map.length > 1 ? ("地図 " + b.map.length + "拍") : "") + '</span>'
+      + '<span class="f">全' + barBeatList(bi).length + '小節'
+      + (b.map && b.map.length > 1 ? (" / 地図 " + b.map.length + "拍") : "") + '</span>'
       + '</div>'
       + '<div class="bars">' + items + '</div></div>';
   }).join("");
@@ -943,6 +961,7 @@ function renderBlocks(){
     const s = box.querySelector('[data-sel="' + bi + ',' + ii + '"]');
     if (s) s.value = it.patId;
   }));
+  if (typeof fillBlockSelect === "function") fillBlockSelect();
 }
 
 function renderAll(){ renderGrid(); renderChips(); renderBlocks(); }
@@ -1112,10 +1131,8 @@ document.getElementById("blocks").addEventListener("click", e => {
     renderBlocks(); return; }
   if ((t = g("bnow"))){
     const bi = +t.dataset.bnow;
-    if (songSrc){
-      let pos = songSeekAt + (AC.currentTime - songT0);
-      if (document.getElementById("chkSnap").checked) pos = snapTime(pos);
-      S.blocks[bi].start = Math.max(0, pos);
+    if (songBuf){
+      S.blocks[bi].start = Math.max(0, cursor);
       renderBlocks(); syncRedraw();
     }
     return;
@@ -1720,6 +1737,8 @@ var songMuted = false, taikoMuted = false;
 var peaks = null;          // 波形の山谷
 var waveCache = null, waveW = 0, waveH = 92, waveDpr = 1;
 var tapTimes = [];
+var cursor = 0;            // 波形の赤い線＝再生位置（秒）
+var previewOn = false;     // 曲だけ再生中
 const ZOOM_SPAN = 2.0;     // 拡大表示の幅（秒）
 
 function syncActive(){
@@ -1767,17 +1786,19 @@ function startSong(when, seek){
 }
 function stopSong(){
   if (songSrc){
+    songSrc.onended = null;
     try { songSrc.stop(); } catch (e){}
     try { songSrc.disconnect(); } catch (e){}
     songSrc = null;
   }
   const v = document.getElementById("vid");
   if (v && !v.paused) v.pause();
-  drawPlayhead(-1);
+  drawPlayhead(cursor);
 }
 function syncTick(){
   if (!songBuf || !songSrc) return;
   const pos = songSeekAt + (AC.currentTime - songT0);
+  cursor = pos;
   drawPlayhead(pos);
   const v = document.getElementById("vid");
   if (hasVideo && v && !v.paused){
@@ -1786,6 +1807,60 @@ function syncTick(){
       try { v.currentTime = want; } catch (e){}
     }
   }
+}
+
+/* ---------- 曲だけ再生（頭出し用） ---------- */
+function fmtMs(t){
+  t = Math.max(0, t);
+  const m = Math.floor(t / 60), s = Math.floor(t % 60);
+  const ms = Math.round((t - Math.floor(t)) * 1000);
+  return m + ":" + String(s).padStart(2, "0") + "." + String(ms).padStart(3, "0");
+}
+function updateTransport(){
+  const b = document.getElementById("curTime");
+  if (b) b.textContent = fmtMs(cursor);
+  const p = document.getElementById("btnPrev");
+  if (p) p.textContent = previewOn ? "停止" : "曲だけ再生";
+}
+function setCursor(t, restart){
+  if (!songBuf) return;
+  cursor = Math.max(0, Math.min(songBuf.duration, t));
+  if (previewOn && restart !== false){ previewPlay(); return; }
+  drawPlayhead(cursor); drawZoom(); updateTransport();
+}
+function previewPlay(){
+  if (!songBuf) return;
+  initAudio();
+  if (AC.state === "suspended") AC.resume();
+  if (playing) stop();
+  if (recMode) finishRec();
+  previewOn = true;
+  startSong(AC.currentTime + 0.1, Math.min(cursor, Math.max(0, songBuf.duration - 0.05)));
+  if (songSrc) songSrc.onended = () => { if (previewOn) previewStop(); };
+  updateTransport();
+  requestAnimationFrame(previewLoop);
+}
+function previewStop(){
+  previewOn = false;
+  stopSong();
+  updateTransport();
+  drawZoom();
+}
+let zoomTick = 0;
+function previewLoop(){
+  if (!previewOn) return;
+  syncTick();
+  updateTransport();
+  if ((zoomTick++ % 6) === 0) drawZoom();
+  requestAnimationFrame(previewLoop);
+}
+function fillBlockSelect(){
+  const sel = document.getElementById("selBlockSet");
+  if (!sel) return;
+  const keep = sel.value;
+  sel.innerHTML = S.blocks.map((b, i) =>
+    '<option value="' + i + '">' + esc(b.name) + '</option>').join("");
+  if (keep !== "" && +keep < S.blocks.length) sel.value = keep;
 }
 
 /* ---------- 波形 ---------- */
@@ -1851,8 +1926,10 @@ function drawWaveStatic(){
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
   });
   const ox = Math.round(songOffset * W / dur) + 0.5;
-  ctx.strokeStyle = "#E24A2B"; ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(237,231,218,.45)"; ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
   ctx.beginPath(); ctx.moveTo(ox, 0); ctx.lineTo(ox, H); ctx.stroke();
+  ctx.setLineDash([]);
   waveCache = document.createElement("canvas");
   waveCache.width = c.width; waveCache.height = c.height;
   waveCache.getContext("2d").drawImage(c, 0, 0);
@@ -1868,7 +1945,7 @@ function drawPlayhead(pos){
   ctx.restore();
   if (pos < 0 || pos > songBuf.duration) return;
   const x = Math.round(pos * waveW / songBuf.duration) + 0.5;
-  ctx.strokeStyle = "#FFF3D0"; ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#E24A2B"; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, waveH); ctx.stroke();
 }
 function drawZoom(){
@@ -1879,7 +1956,7 @@ function drawZoom(){
   const W = c.clientWidth || 600;
   ctx.clearRect(0, 0, W, H);
   if (!songBuf) return;
-  const t0 = songOffset - ZOOM_SPAN / 2;
+  const t0 = cursor - ZOOM_SPAN / 2;
   const ch = songBuf.getChannelData(0), rate = songBuf.sampleRate, mid = H / 2;
   const N = Math.min(W, 700), bw = Math.max(1, W / N);
   ctx.fillStyle = "#4E7099";
@@ -1906,7 +1983,7 @@ function drawZoom(){
     }
   } else {
     const beat = 60 / S.bpm;
-    for (let k = -12; k <= 12; k++){
+    for (let k = -40; k <= 40; k++){
       const t = songOffset + k * beat;
       if (t < t0 || t > t0 + ZOOM_SPAN) continue;
       const x = Math.round((t - t0) / ZOOM_SPAN * W) + 0.5;
@@ -1914,6 +1991,14 @@ function drawZoom(){
     }
   }
   ctx.stroke();
+  // ブロックの頭
+  ctx.strokeStyle = "#E0A32E"; ctx.lineWidth = 2;
+  S.blocks.forEach((b, bi) => {
+    const a = blockAnchor(bi);
+    if (a == null || a < t0 || a > t0 + ZOOM_SPAN) return;
+    const x = Math.round((a - t0) / ZOOM_SPAN * W) + 0.5;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  });
   ctx.strokeStyle = "#E24A2B"; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
 }
@@ -2055,16 +2140,20 @@ function snapTime(t){
 function updateMapUI(){
   const has = !!(beatMap && beatMap.length > 1);
   document.getElementById("mapStat").textContent = recMode
-    ? ("記録中… " + recTaps.length + " 回")
+    ? ("記録中… " + recTaps.length + (recBlock >= 0 ? " 小節" : " 回"))
     : (has ? ("地図：" + beatMap.length + "拍 / 平均 " + mapAvgBpm().toFixed(1) + " BPM")
            : "地図はまだありません");
   document.getElementById("btnRec").textContent = recMode ? "記録をおわる" : "タップ記録をはじめる";
   const pad = document.getElementById("padTap");
   pad.style.display = recMode ? "" : "none";
   pad.classList.toggle("on", recMode);
-  pad.textContent = (recBlock >= 0 && S.blocks[recBlock]
-      ? "「" + S.blocks[recBlock].name + "」の小節の頭をタップ"
-      : "拍をタップ") + "（スペースキーでも）";
+  if (recBlock >= 0 && S.blocks[recBlock]){
+    const total = barBeatList(recBlock).length;
+    pad.textContent = "「" + S.blocks[recBlock].name + "」1小節目の頭からタップ　"
+      + recTaps.length + " / " + total + " 小節";
+  } else {
+    pad.textContent = "拍をタップ（スペースキーでも）　" + recTaps.length + " 回";
+  }
   const cm = document.getElementById("chkMap");
   cm.checked = mapOn && has;
   cm.disabled = !has;
@@ -2083,6 +2172,7 @@ function startRec(bi){
     const a = blockAnchor(recBlock);
     from = Math.max(0, (a != null ? a : songOffset) - 1.0);
   }
+  cursor = from;
   updateMapUI(); renderBlocks();
   const t0 = AC.currentTime + 0.3;
   startSong(t0, from);
@@ -2265,13 +2355,24 @@ document.getElementById("btnClearSong").onclick = clearSong;
 document.getElementById("wave").addEventListener("click", e => {
   if (!songBuf) return;
   const r = e.currentTarget.getBoundingClientRect();
-  setSongOffset((e.clientX - r.left) / r.width * songBuf.duration);
+  setCursor((e.clientX - r.left) / r.width * songBuf.duration);
 });
 document.getElementById("zoom").addEventListener("click", e => {
   if (!songBuf) return;
   const r = e.currentTarget.getBoundingClientRect();
-  setSongOffset(songOffset + ((e.clientX - r.left) / r.width - 0.5) * ZOOM_SPAN);
+  setCursor(cursor + ((e.clientX - r.left) / r.width - 0.5) * ZOOM_SPAN);
 });
+document.getElementById("btnPrev").onclick = () => previewOn ? previewStop() : previewPlay();
+document.querySelectorAll("[data-cur]").forEach(b => {
+  b.onclick = () => setCursor(cursor + parseFloat(b.dataset.cur));
+});
+document.getElementById("btnSetBlock").onclick = () => {
+  const sel = document.getElementById("selBlockSet");
+  const bi = +sel.value;
+  if (!S.blocks[bi]) return;
+  S.blocks[bi].start = Math.max(0, cursor);
+  renderBlocks(); syncRedraw();
+};
 document.getElementById("offNum").oninput = e => {
   const v = parseFloat(e.target.value);
   if (!isNaN(v)){
@@ -2286,8 +2387,8 @@ document.querySelectorAll("[data-bpm]").forEach(b => {
   b.onclick = () => setBpm(S.bpm + parseFloat(b.dataset.bpm));
 });
 document.getElementById("btnHere").onclick = () => {
-  if (!songSrc || !songBuf) return;
-  setSongOffset(songSeekAt + (AC.currentTime - songT0));
+  if (!songBuf) return;
+  setSongOffset(cursor);
 };
 document.getElementById("btnTap").onclick = () => {
   const now = performance.now();
@@ -2334,6 +2435,7 @@ setBpm(S.bpm);
 renderAll();
 applyVols();
 updateMapUI();
+updateTransport();
 lastSaved = serialize();
 fitTop();
 window.addEventListener("load", fitTop);
