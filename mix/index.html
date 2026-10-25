@@ -347,7 +347,7 @@ textarea{width:100%;min-height:210px;background:var(--ink2);border:1px solid var
         <button class="btn sm ghost" id="btnClearMap">地図を消す</button>
         <span class="f" id="mapStat">地図はまだありません</span>
       </div>
-      <div class="wavehint">記録をはじめると曲が頭から流れます。聞きながら拍をたたいてください。地図を使っているあいだは、太鼓はBPMではなくこの地図に従って鳴ります。</div>
+      <div class="wavehint">ここは曲全体をまとめて記録するときに使います。ブロックごとの記録は「構成」から、小節の頭だけをたたきます。<br>記録をはじめると曲が頭から流れます。聞きながら拍をたたいてください。地図を使っているあいだは、太鼓はBPMではなくこの地図に従って鳴ります。</div>
     </div>
 
     <div class="hint">
@@ -372,10 +372,15 @@ textarea{width:100%;min-height:210px;background:var(--ink2);border:1px solid var
 <section>
   <h2>構成</h2>
   <div id="blocks"></div>
-  <button class="btn" id="btnNewBlock">＋ ブロックを追加</button>
+  <div class="row">
+    <button class="btn" id="btnNewBlock">＋ ブロックを追加</button>
+    <button class="btn ghost sm" id="btnClearAlign">合わせをすべて消す</button>
+    <button class="btn ghost sm" id="btnClearBlocks">ブロックをすべて消す</button>
+  </div>
   <div class="hint">
     曲を読み込むと、ブロックごとに「曲の開始」秒を決められます。ブロックの頭さえ合わせておけば、そこからテンポで進むので、曲全体の地図を作らなくても section ごとに合わせられます。<br>
-    もっと細かく揺れる場所は「拍記録」でそのブロックだけの拍の地図を作れます。地図があるブロックは地図が優先されます。
+    もっと細かく揺れる場所は「小節頭を記録」で、そのブロックだけの拍の地図を作れます。小節の頭だけたたけば、あいだの拍は自動で割り振られます。地図があるブロックは地図が優先されます。<br>
+    「合わせをすべて消す」は全ブロックの開始秒と地図だけを消します。「ブロックをすべて消す」は構成そのものを作り直します。
   </div>
 </section>
 
@@ -928,7 +933,7 @@ function renderBlocks(){
       + (b.start != null ? (+b.start).toFixed(3) : "") + '" data-bstart="' + bi + '">'
       + '<span class="f">秒</span>'
       + '<button class="btn sm" data-bnow="' + bi + '" title="再生中のいまをこのブロックの頭にする">いま</button>'
-      + '<button class="btn sm" data-bmap="' + bi + '">' + (recBlock === bi ? "記録をおわる" : "拍記録") + '</button>'
+      + '<button class="btn sm" data-bmap="' + bi + '">' + (recBlock === bi ? "記録をおわる" : "小節頭を記録") + '</button>'
       + (b.map && b.map.length > 1 ? '<button class="btn sm ghost" data-bmapdel="' + bi + '">地図消す</button>' : "")
       + '<span class="f">' + (b.map && b.map.length > 1 ? ("地図 " + b.map.length + "拍") : "") + '</span>'
       + '</div>'
@@ -1066,6 +1071,22 @@ document.getElementById("btnDelPat").onclick = () => {
   S.selPat = Math.max(0, S.selPat - 1); renderAll();
 };
 
+document.getElementById("btnClearAlign").onclick = () => {
+  if (!confirm("すべてのブロックの開始秒と拍の地図を消します。よろしいですか？")) return;
+  if (recMode) finishRec();
+  S.blocks.forEach(b => { b.start = null; b.map = null; });
+  renderBlocks();
+  if (typeof syncRedraw === "function") syncRedraw();
+};
+document.getElementById("btnClearBlocks").onclick = () => {
+  if (!confirm("ブロックをすべて消して、1つだけの構成に戻します。よろしいですか？")) return;
+  if (playing) stop();
+  if (recMode) finishRec();
+  const p = curPat();
+  S.blocks = [{ name:"序", items: p ? [{patId:p.id, rep:1}] : [], start:null, map:null }];
+  renderBlocks();
+  if (typeof syncRedraw === "function") syncRedraw();
+};
 document.getElementById("btnNewBlock").onclick = () => {
   const p = curPat();
   S.blocks.push({ name:"ブロック " + (S.blocks.length + 1), items: p ? [{patId:p.id, rep:1}] : [] });
@@ -2042,7 +2063,7 @@ function updateMapUI(){
   pad.style.display = recMode ? "" : "none";
   pad.classList.toggle("on", recMode);
   pad.textContent = (recBlock >= 0 && S.blocks[recBlock]
-      ? "「" + S.blocks[recBlock].name + "」の拍をタップ"
+      ? "「" + S.blocks[recBlock].name + "」の小節の頭をタップ"
       : "拍をタップ") + "（スペースキーでも）";
   const cm = document.getElementById("chkMap");
   cm.checked = mapOn && has;
@@ -2086,8 +2107,12 @@ function finishRec(){
   stopSong();
   let taps = recTaps.slice().sort((a, b) => a - b);
   if (document.getElementById("chkSnap").checked) taps = taps.map(snapTime);
-  if (document.getElementById("selUnit").value === "bar"){
-    const p = recBlock >= 0 ? firstPatOfBlock(recBlock) : alignPat();
+  if (recBlock >= 0){
+    // ブロックの記録は小節の頭だけ。あいだの拍はその小節の拍数で割り振る
+    const p = firstPatOfBlock(recBlock);
+    taps = expandByBars(taps, barBeatList(recBlock), p ? p.beats : 4);
+  } else if (document.getElementById("selUnit").value === "bar"){
+    const p = alignPat();
     taps = expandBars(taps, p ? p.beats : 4);
   }
   if (taps.length > 1){
@@ -2103,6 +2128,33 @@ function finishRec(){
   recBlock = -1;
   updateMapUI(); renderBlocks();
   syncRedraw();
+}
+/* ブロックの小節ごとの拍数 */
+function barBeatList(bi){
+  const out = [];
+  const b = S.blocks[bi];
+  if (!b) return out;
+  b.items.forEach(it => {
+    const p = patById(it.patId); if (!p) return;
+    const rep = Math.max(1, it.rep | 0);
+    for (let r = 0; r < rep; r++) out.push(p.beats);
+  });
+  return out;
+}
+/* 小節の頭のタップを、拍ごとの地図に広げる */
+function expandByBars(taps, beatsList, fallback){
+  if (taps.length < 2) return taps;
+  const out = [];
+  for (let i = 0; i < taps.length - 1; i++){
+    const nb = beatsList[i] || fallback;
+    const step = (taps[i + 1] - taps[i]) / nb;
+    for (let k = 0; k < nb; k++) out.push(taps[i] + step * k);
+  }
+  const li = taps.length - 1;
+  const nb = beatsList[li] || fallback;
+  const prev = (taps[li] - taps[li - 1]) / (beatsList[li - 1] || fallback);
+  for (let k = 0; k < nb; k++) out.push(taps[li] + prev * k);
+  return out;
 }
 function expandBars(taps, beats){
   const out = [];
