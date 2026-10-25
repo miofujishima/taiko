@@ -324,6 +324,7 @@ textarea{width:100%;min-height:210px;background:var(--ink2);border:1px solid var
     <div class="hint">
       曲と太鼓は同じ時計で鳴るので、長く再生してもずれません。イヤホンの遅れは両方に同じだけかかるため、耳には揃って聞こえます。<br>
       曲のファイルはこのブラウザの中だけで読み込まれ、どこにも送られません。ただし大きすぎるため自動保存には含まれず、開くたびに選び直しが必要です（合わせ位置とテンポは保存されます）。<br>
+      合わせ位置・テンポ・映像のずれ補正・曲のファイル名は、下の「テキストに書き出す」にも含まれます。別の端末へ移すときはそれを持っていってください。<br>
       曲と合わせているあいだは、頭のカウントと「ループごとにテンポを上げる」は働きません。音声の書き出しにも曲は含まれません。
     </div>
   </div>
@@ -1055,6 +1056,13 @@ document.addEventListener("keydown", e => {
 const DIVNAME = {2:"8分", 4:"16分", 6:"3連", 8:"32分"};
 const NAMEDIV = {"8分":2, "16分":4, "3連":6, "32分":8};
 
+function alignLine(){
+  return "#合わせ 先頭=" + songOffset.toFixed(3)
+    + " 映像ずれ=" + Math.round(videoShift * 1000)
+    + " 頭から=" + (document.getElementById("chkFromTop").checked ? 1 : 0)
+    + (songFileName ? " ファイル=" + songFileName : "");
+}
+
 function toText(){
   const rest = document.getElementById("selRest").value;
   const L = [];
@@ -1062,6 +1070,7 @@ function toText(){
   L.push("#BPM " + S.bpm);
   L.push("#声 " + VOICES.map(v => v.key + "=" + v.name).join(" "));
   L.push("#休符 " + rest);
+  L.push(alignLine());
   S.patterns.forEach(p => {
     L.push("");
     L.push("#譜 " + p.name + " " + p.beats + "拍 " + DIVNAME[p.div]);
@@ -1082,6 +1091,7 @@ function toTsv(){
   const rows = [];
   rows.push(["#曲", S.name]);
   rows.push(["#BPM", S.bpm]);
+  rows.push([alignLine()]);
   S.patterns.forEach(p => {
     rows.push([]);
     rows.push(["#譜", p.name, p.beats + "拍", DIVNAME[p.div]]);
@@ -1109,7 +1119,7 @@ function fromText(txt){
   const isTsv = txt.indexOf("\t") >= 0;
   const lines = txt.replace(/\r/g, "").split("\n");
   const st = { name:"読み込んだ曲", bpm:100, patterns:[], blocks:[], selPat:0,
-    muted: new Array(NV).fill(false) };
+    muted: new Array(NV).fill(false), align:null };
   let mode = null, cur = null, curBlock = null, rowV = 0;
 
   const finishPat = () => { if (cur){ st.patterns.push(cur); cur = null; } };
@@ -1122,6 +1132,22 @@ function fromText(txt){
       const head = cells[0].trim();
       if (/^#曲/.test(head)){ finishPat(); st.name = (cells[1] || line.replace(/^#曲\s*/, "")).trim() || st.name; mode = null; continue; }
       if (/^#BPM/i.test(head)){ finishPat(); st.bpm = parseFloat((cells[1] || line.replace(/^#BPM\s*/i, ""))) || 100; mode = null; continue; }
+      if (/^#合わせ/.test(head)){
+        finishPat();
+        const body = (cells.length > 1 ? cells.slice(1).join(" ") : line.replace(/^#合わせ\s*/, ""));
+        const num = k => {
+          const m = body.match(new RegExp(k + "=(-?[0-9.]+)"));
+          return m ? parseFloat(m[1]) : null;
+        };
+        const mf = body.match(/ファイル=(.*)$/);
+        st.align = {
+          offset: num("先頭"),
+          vshift: num("映像ずれ"),
+          fromTop: num("頭から"),
+          file: mf ? mf[1].trim() : null
+        };
+        mode = null; continue;
+      }
       if (/^#声/.test(head) || /^#休符/.test(head)){ continue; }
       if (/^#譜/.test(head)){
         finishPat();
@@ -1222,6 +1248,7 @@ document.getElementById("btnImport").onclick = () => {
     document.getElementById("songName").value = S.name;
     setBpm(S.bpm);
     renderAll();
+    if (st.align) applyAlign(st.align);
     msg("読み込みました：譜面 " + S.patterns.length + " / ブロック " + S.blocks.length, true);
   } catch (err){
     msg("読み込めませんでした：" + err.message, false);
@@ -1392,7 +1419,7 @@ document.getElementById("btnMp3").onclick = async () => {
 /* ============================================================
    自動保存（ブラウザ内に保存）
    ============================================================ */
-const SKEY = "taiko-trainer-v1";
+const SKEY = "taiko-mix-v1";
 let lastSaved = "";
 let saveOK = true;
 
@@ -1412,7 +1439,8 @@ function settingsSnapshot(){
     offset: songOffset,
     vshift: Math.round(videoShift * 1000),
     songVol: Math.round(songVol * 100),
-    taikoVol: Math.round(taikoVol * 100)
+    taikoVol: Math.round(taikoVol * 100),
+    file: songFileName
   };
 }
 function serialize(){
@@ -1490,6 +1518,11 @@ function restore(){
       document.getElementById("taikoVolRange").value = st.taikoVol;
       document.getElementById("taikoVolVal").textContent = st.taikoVol + "%";
     }
+    if (st.file){
+      songFileName = st.file;
+      document.getElementById("songStat").textContent = "\u300c" + st.file + "\u300d\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044";
+      document.getElementById("syncBody").style.display = "";
+    }
     applyVols();
     document.getElementById("songName").value = S.name;
     return true;
@@ -1520,6 +1553,7 @@ var songT0 = 0;            // 曲を鳴らし始めた時刻（AudioContext）
 var songSeekAt = 0;        // そのとき曲のどこから始めたか（秒）
 var songOffset = 0;        // 1小節目の頭（秒）
 var videoShift = 0;        // 映像のずれ補正（秒）
+var songFileName = "";    // 合わせていた曲のファイル名（中身は保存しない）
 var songVol = 0.9, taikoVol = 0.9;
 var songMuted = false, taikoMuted = false;
 var peaks = null;          // 波形の山谷
@@ -1714,6 +1748,22 @@ function setSongOffset(v){
   syncRedraw();
 }
 
+/* ---------- テキストから合わせ情報を受け取る ---------- */
+function applyAlign(a){
+  if (a.offset != null && !isNaN(a.offset)) setSongOffset(a.offset);
+  if (a.vshift != null && !isNaN(a.vshift)){
+    const ms = Math.round(a.vshift);
+    videoShift = ms / 1000;
+    document.getElementById("vshift").value = ms;
+    document.getElementById("vshiftVal").textContent = ms + " ms";
+  }
+  if (a.fromTop != null) document.getElementById("chkFromTop").checked = !!a.fromTop;
+  if (a.file){
+    songFileName = a.file;
+    if (!songBuf) document.getElementById("songStat").textContent = "\u300c" + a.file + "\u300d\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044";
+  }
+}
+
 /* ---------- 読み込み ---------- */
 async function loadSong(file){
   const st = document.getElementById("songStat");
@@ -1726,6 +1776,7 @@ async function loadSong(file){
     if (playing) stop();
     stopSong();
     songBuf = buf;
+    songFileName = file.name;
     hasVideo = /^video\//.test(file.type) || /\.(mp4|m4v|webm|mov|mkv|avi)$/i.test(file.name);
     if (songURL) URL.revokeObjectURL(songURL);
     songURL = URL.createObjectURL(file);
@@ -1755,6 +1806,7 @@ function clearSong(){
   document.getElementById("vidCard").style.display = "none";
   if (songURL){ URL.revokeObjectURL(songURL); songURL = null; }
   document.getElementById("syncBody").style.display = "none";
+  songFileName = "";
   document.getElementById("songStat").textContent = "まだ読み込んでいません";
   document.getElementById("songInput").value = "";
 }
