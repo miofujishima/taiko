@@ -321,6 +321,30 @@ textarea{width:100%;min-height:210px;background:var(--ink2);border:1px solid var
       </div>
     </div>
 
+    <div class="card" style="margin-top:12px">
+      <label class="f">拍の地図（生演奏やテンポが揺れる曲むけ）</label>
+      <div class="row" style="margin-top:7px">
+        <button class="btn primary" id="btnRec">タップ記録をはじめる</button>
+        <label class="f" style="display:inline">単位
+          <select id="selUnit" style="width:auto;margin-left:5px">
+            <option value="beat">1拍ごと</option>
+            <option value="bar">小節の頭だけ</option>
+          </select>
+        </label>
+        <label class="toggle"><input type="checkbox" id="chkSnap" checked>打点に吸い付ける</label>
+        <label class="f" style="display:inline">ずれ補正
+          <input type="number" id="tapAdj" value="0" step="10" style="width:72px;margin-left:5px"> ms</label>
+      </div>
+      <button class="btn" id="padTap" style="display:none;width:100%;padding:26px 10px;margin-top:9px;font-size:17px">ここをタップ（スペースキーでも）</button>
+      <div class="row" style="margin-top:9px">
+        <label class="toggle"><input type="checkbox" id="chkMap">地図を使う</label>
+        <button class="btn sm" id="btnUndoTap">1つ戻す</button>
+        <button class="btn sm ghost" id="btnClearMap">地図を消す</button>
+        <span class="f" id="mapStat">地図はまだありません</span>
+      </div>
+      <div class="wavehint">記録をはじめると曲が頭から流れます。聞きながら拍をたたいてください。地図を使っているあいだは、太鼓はBPMではなくこの地図に従って鳴ります。</div>
+    </div>
+
     <div class="hint">
       曲と太鼓は同じ時計で鳴るので、長く再生してもずれません。イヤホンの遅れは両方に同じだけかかるため、耳には揃って聞こえます。<br>
       曲のファイルはこのブラウザの中だけで読み込まれ、どこにも送られません。ただし大きすぎるため自動保存には含まれず、開くたびに選び直しが必要です（合わせ位置とテンポは保存されます）。<br>
@@ -597,6 +621,7 @@ let countLeft = 0;     // 残りカウント数
 let countBeats = 4;
 let guideOn = false;
 let visQ = [];         // 画面用 [{time, patId, step, seqPos}]
+let beatAcc = 0;       // 曲の頭から何拍目か（拍の地図用）
 const LOOKAHEAD = 0.12, TICK = 25;
 
 function buildSeq(startBlock){
@@ -632,7 +657,7 @@ function start(startBlock){
   if (!seq.length){ const p = curPat(); if (p) seq = [{patId:p.id, blockIdx:-1, itemIdx:-1}]; }
   if (!seq.length) return;
 
-  seqPos = 0; stepPos = 0; visQ = [];
+  seqPos = 0; stepPos = 0; visQ = []; beatAcc = 0;
   const first = patById(seq[0].patId) || curPat();
   countBeats = first ? first.beats : 4;
   countLeft = document.getElementById("chkCount").checked ? countBeats : 0;
@@ -642,7 +667,8 @@ function start(startBlock){
     countLeft = 0;                                  // 曲に合わせるときはカウントを入れない
     const seek = document.getElementById("chkFromTop").checked ? 0 : Math.max(0, songOffset);
     startSong(t0, seek);
-    nextTime = t0 + (songOffset - seek);            // 曲の1小節目の頭で太鼓が始まる
+    nextTime = mapActive() ? songClock(0)           // 拍の地図があればそれに従う
+                           : t0 + (songOffset - seek);
   } else {
     nextTime = t0;
   }
@@ -681,7 +707,8 @@ function scheduler(){
     if (guideOn && stepPos % p.div === 0) countClick(nextTime, stepPos === 0, true);
     for (let v = 0; v < NV; v++){ const g = p.grid[v][stepPos]; if (g) hit(v, nextTime, g === 2); }
     visQ.push({time:nextTime, patId:p.id, step:stepPos, seqPos:seqPos});
-    nextTime += (60 / S.bpm) / p.div;
+    beatAcc += 1 / p.div;
+    nextTime = mapActive() ? songClock(beatAcc) : nextTime + (60 / S.bpm) / p.div;
 
     stepPos++;
     if (stepPos >= n){
@@ -883,7 +910,10 @@ function renderAll(){ renderGrid(); renderChips(); renderBlocks(); }
 /* ============================================================
    操作
    ============================================================ */
-document.getElementById("btnPlay").onclick = () => playing ? stop() : start(null);
+document.getElementById("btnPlay").onclick = () => {
+  if (recMode){ finishRec(); return; }
+  playing ? stop() : start(null);
+};
 document.getElementById("bpmUp").onclick = () => setBpm(S.bpm + 1);
 document.getElementById("bpmDown").onclick = () => setBpm(S.bpm - 1);
 document.getElementById("songName").oninput = e => S.name = e.target.value;
@@ -1047,7 +1077,7 @@ document.getElementById("blocks").addEventListener("change", e => {
 
 document.addEventListener("keydown", e => {
   if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
-  if (e.code === "Space"){ e.preventDefault(); playing ? stop() : start(null); }
+  if (e.code === "Space"){ e.preventDefault(); if (recMode) tapBeat(); else playing ? stop() : start(null); }
 });
 
 /* ============================================================
@@ -1071,6 +1101,7 @@ function toText(){
   L.push("#声 " + VOICES.map(v => v.key + "=" + v.name).join(" "));
   L.push("#休符 " + rest);
   L.push(alignLine());
+  mapLines().forEach(x => L.push(x));
   S.patterns.forEach(p => {
     L.push("");
     L.push("#譜 " + p.name + " " + p.beats + "拍 " + DIVNAME[p.div]);
@@ -1092,6 +1123,7 @@ function toTsv(){
   rows.push(["#曲", S.name]);
   rows.push(["#BPM", S.bpm]);
   rows.push([alignLine()]);
+  mapLines().forEach(x => rows.push([x]));
   S.patterns.forEach(p => {
     rows.push([]);
     rows.push(["#譜", p.name, p.beats + "拍", DIVNAME[p.div]]);
@@ -1119,7 +1151,7 @@ function fromText(txt){
   const isTsv = txt.indexOf("\t") >= 0;
   const lines = txt.replace(/\r/g, "").split("\n");
   const st = { name:"読み込んだ曲", bpm:100, patterns:[], blocks:[], selPat:0,
-    muted: new Array(NV).fill(false), align:null };
+    muted: new Array(NV).fill(false), align:null, map:[], mapOn:0 };
   let mode = null, cur = null, curBlock = null, rowV = 0;
 
   const finishPat = () => { if (cur){ st.patterns.push(cur); cur = null; } };
@@ -1148,6 +1180,13 @@ function fromText(txt){
         };
         mode = null; continue;
       }
+      if (/^#拍地図/.test(head)){
+        finishPat();
+        const m = (cells.length > 1 ? cells.join(" ") : line).match(/使う=([01])/);
+        st.mapOn = m ? +m[1] : 1;
+        st.map = [];
+        mode = "map"; continue;
+      }
       if (/^#声/.test(head) || /^#休符/.test(head)){ continue; }
       if (/^#譜/.test(head)){
         finishPat();
@@ -1172,6 +1211,11 @@ function fromText(txt){
         curBlock = { name: nm || ("ブロック " + (st.blocks.length+1)), items:[] };
         st.blocks.push(curBlock); mode = "block"; continue;
       }
+      continue;
+    }
+
+    if (mode === "map"){
+      line.split(/\s+/).forEach(x => { const v = parseFloat(x); if (!isNaN(v)) st.map.push(v); });
       continue;
     }
 
@@ -1249,6 +1293,13 @@ document.getElementById("btnImport").onclick = () => {
     setBpm(S.bpm);
     renderAll();
     if (st.align) applyAlign(st.align);
+    if (st.map && st.map.length > 1){
+      beatMap = st.map.slice().sort((a, b) => a - b);
+      mapOn = !!st.mapOn;
+    } else {
+      beatMap = null; mapOn = false;
+    }
+    updateMapUI(); syncRedraw();
     msg("読み込みました：譜面 " + S.patterns.length + " / ブロック " + S.blocks.length, true);
   } catch (err){
     msg("読み込めませんでした：" + err.message, false);
@@ -1440,7 +1491,9 @@ function settingsSnapshot(){
     vshift: Math.round(videoShift * 1000),
     songVol: Math.round(songVol * 100),
     taikoVol: Math.round(taikoVol * 100),
-    file: songFileName
+    file: songFileName,
+    map: beatMap ? beatMap.map(t => +t.toFixed(3)) : null,
+    mapOn: mapOn
   };
 }
 function serialize(){
@@ -1518,6 +1571,7 @@ function restore(){
       document.getElementById("taikoVolRange").value = st.taikoVol;
       document.getElementById("taikoVolVal").textContent = st.taikoVol + "%";
     }
+    if (st.map && st.map.length > 1){ beatMap = st.map.slice(); mapOn = !!st.mapOn; }
     if (st.file){
       songFileName = st.file;
       document.getElementById("songStat").textContent = "\u300c" + st.file + "\u300d\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044";
@@ -1668,15 +1722,16 @@ function drawWaveStatic(){
     const y2 = mid - peaks[i*2] * mid * 0.92;
     ctx.fillRect(x, y1, bw, Math.max(1, y2 - y1));
   }
-  const bs = barSec(), pxBar = bs * W / dur;
-  if (bs > 0.02 && pxBar > 0.5){
-    const every = pxBar < 6 ? Math.ceil(6 / pxBar) : 1;
-    ctx.strokeStyle = "rgba(255,243,208,.32)"; ctx.lineWidth = 1;
+  const bars = barTimes(dur);
+  if (bars.length > 1){
+    const px = (bars[1] - bars[0]) * W / dur;
+    const every = (px > 0 && px < 6) ? Math.ceil(6 / px) : 1;
+    ctx.strokeStyle = mapOn && beatMap ? "rgba(79,179,165,.5)" : "rgba(255,243,208,.32)";
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    let n = 0;
-    for (let t = songOffset; t <= dur; t += bs, n++){
-      if (t < 0 || n % every) continue;
-      const x = Math.round(t * W / dur) + 0.5;
+    for (let i = 0; i < bars.length; i++){
+      if (bars[i] < 0 || i % every) continue;
+      const x = Math.round(bars[i] * W / dur) + 0.5;
       ctx.moveTo(x, 0); ctx.lineTo(x, H);
     }
     ctx.stroke();
@@ -1724,14 +1779,25 @@ function drawZoom(){
     for (let j = s; j < e; j++){ const v = ch[j]; if (v < mn) mn = v; if (v > mx) mx = v; }
     ctx.fillRect(i * W / N, mid - mx * mid * 0.9, bw, Math.max(1, (mx - mn) * mid * 0.9));
   }
-  const beat = 60 / S.bpm;
-  ctx.strokeStyle = "rgba(255,243,208,.22)"; ctx.lineWidth = 1;
+  ctx.strokeStyle = mapOn && beatMap ? "rgba(79,179,165,.45)" : "rgba(255,243,208,.22)";
+  ctx.lineWidth = 1;
   ctx.beginPath();
-  for (let k = -12; k <= 12; k++){
-    const t = songOffset + k * beat;
-    if (t < t0 || t > t0 + ZOOM_SPAN) continue;
-    const x = Math.round((t - t0) / ZOOM_SPAN * W) + 0.5;
-    ctx.moveTo(x, 0); ctx.lineTo(x, H);
+  if (mapOn && beatMap && beatMap.length > 1){
+    for (let i = 0; i < beatMap.length; i++){
+      const t = beatMap[i];
+      if (t < t0) continue;
+      if (t > t0 + ZOOM_SPAN) break;
+      const x = Math.round((t - t0) / ZOOM_SPAN * W) + 0.5;
+      ctx.moveTo(x, 0); ctx.lineTo(x, H);
+    }
+  } else {
+    const beat = 60 / S.bpm;
+    for (let k = -12; k <= 12; k++){
+      const t = songOffset + k * beat;
+      if (t < t0 || t > t0 + ZOOM_SPAN) continue;
+      const x = Math.round((t - t0) / ZOOM_SPAN * W) + 0.5;
+      ctx.moveTo(x, 0); ctx.lineTo(x, H);
+    }
   }
   ctx.stroke();
   ctx.strokeStyle = "#E24A2B"; ctx.lineWidth = 2;
@@ -1747,6 +1813,157 @@ function setSongOffset(v){
   document.getElementById("offNum").value = songOffset.toFixed(3);
   syncRedraw();
 }
+
+/* ---------- 拍の地図 ---------- */
+var beatMap = null;        // 拍ごとの秒（昇順）
+var mapOn = false;         // 地図を使うかどうか
+var recMode = false;       // タップ記録中
+var recTaps = [];
+
+function mapActive(){
+  return syncActive() && mapOn && beatMap && beatMap.length > 1;
+}
+function mapAvgBpm(){
+  if (!beatMap || beatMap.length < 2) return 0;
+  return 60 * (beatMap.length - 1) / (beatMap[beatMap.length - 1] - beatMap[0]);
+}
+/* 拍番号（小数可）→ 曲の中の秒 */
+function beatTime(b){
+  const m = beatMap;
+  if (!m || m.length < 2) return songOffset + b * (60 / S.bpm);
+  if (b <= 0) return m[0] + b * (m[1] - m[0]);
+  const i = Math.floor(b);
+  if (i >= m.length - 1){
+    const d = m[m.length - 1] - m[m.length - 2];
+    return m[m.length - 1] + (b - (m.length - 1)) * d;
+  }
+  return m[i] + (m[i + 1] - m[i]) * (b - i);
+}
+/* 拍番号 → AudioContext の時刻 */
+function songClock(b){
+  return songT0 - songSeekAt + beatTime(b);
+}
+/* 小節線を引く位置 */
+function barTimes(dur){
+  const out = [];
+  const p = alignPat();
+  const beats = p ? p.beats : 4;
+  if (mapOn && beatMap && beatMap.length > 1){
+    for (let i = 0; i < beatMap.length; i += beats) out.push(beatMap[i]);
+    const d = (beatMap[beatMap.length - 1] - beatMap[0]) / (beatMap.length - 1) * beats;
+    if (d > 0.05 && out.length){
+      for (let t = out[out.length - 1] + d; t <= dur; t += d) out.push(t);
+    }
+  } else {
+    const bs = barSec();
+    if (bs > 0.02) for (let t = songOffset; t <= dur; t += bs) if (t >= 0) out.push(t);
+  }
+  return out;
+}
+/* タップした時刻を近くの打点に吸い寄せる */
+function snapTime(t){
+  if (!songBuf) return t;
+  const ch = songBuf.getChannelData(0), rate = songBuf.sampleRate;
+  const c = Math.round(t * rate), win = Math.round(0.06 * rate);
+  const s = Math.max(0, c - win), e = Math.min(ch.length, c + win);
+  const hop = Math.max(1, Math.round(rate * 0.002));
+  let prev = 0, first = true, best = t, bestD = 0;
+  for (let i = s; i + hop <= e; i += hop){
+    let sum = 0;
+    for (let j = i; j < i + hop; j++) sum += Math.abs(ch[j]);
+    const env = sum / hop;
+    if (!first && env - prev > bestD){ bestD = env - prev; best = i / rate; }
+    prev = env; first = false;
+  }
+  return bestD > 0 ? best : t;
+}
+function updateMapUI(){
+  const has = !!(beatMap && beatMap.length > 1);
+  document.getElementById("mapStat").textContent = recMode
+    ? ("記録中… " + recTaps.length + " 回")
+    : (has ? ("地図：" + beatMap.length + "拍 / 平均 " + mapAvgBpm().toFixed(1) + " BPM")
+           : "地図はまだありません");
+  document.getElementById("btnRec").textContent = recMode ? "記録をおわる" : "タップ記録をはじめる";
+  document.getElementById("padTap").style.display = recMode ? "" : "none";
+  const cm = document.getElementById("chkMap");
+  cm.checked = mapOn && has;
+  cm.disabled = !has;
+}
+function startRec(){
+  if (!songBuf) return;
+  if (playing) stop();
+  stopSong();
+  initAudio();
+  if (AC.state === "suspended") AC.resume();
+  recTaps = []; recMode = true;
+  updateMapUI();
+  const t0 = AC.currentTime + 0.3;
+  startSong(t0, 0);
+  if (songSrc) songSrc.onended = () => { if (recMode) finishRec(); };
+  requestAnimationFrame(recLoop);
+}
+function recLoop(){
+  if (!recMode) return;
+  syncTick();
+  requestAnimationFrame(recLoop);
+}
+function tapBeat(){
+  if (!recMode || !songSrc) return;
+  const adj = (parseFloat(document.getElementById("tapAdj").value) || 0) / 1000;
+  const t = songSeekAt + (AC.currentTime - songT0) - adj;
+  if (t >= 0) recTaps.push(t);
+  updateMapUI();
+}
+function finishRec(){
+  if (!recMode) return;
+  recMode = false;
+  stopSong();
+  let taps = recTaps.slice().sort((a, b) => a - b);
+  if (document.getElementById("chkSnap").checked) taps = taps.map(snapTime);
+  if (document.getElementById("selUnit").value === "bar"){
+    const p = alignPat();
+    taps = expandBars(taps, p ? p.beats : 4);
+  }
+  if (taps.length > 1){
+    beatMap = taps;
+    mapOn = true;
+    setSongOffset(beatMap[0]);
+  }
+  updateMapUI();
+  syncRedraw();
+}
+function expandBars(taps, beats){
+  const out = [];
+  if (taps.length < 2) return taps;
+  for (let i = 0; i < taps.length - 1; i++){
+    const step = (taps[i + 1] - taps[i]) / beats;
+    for (let k = 0; k < beats; k++) out.push(taps[i] + step * k);
+  }
+  const last = (taps[taps.length - 1] - taps[taps.length - 2]) / beats;
+  for (let k = 0; k < beats; k++) out.push(taps[taps.length - 1] + last * k);
+  return out;
+}
+function mapLines(){
+  if (!beatMap || beatMap.length < 2) return [];
+  const out = ["#拍地図 数=" + beatMap.length + " 使う=" + (mapOn ? 1 : 0)];
+  for (let i = 0; i < beatMap.length; i += 16){
+    out.push(beatMap.slice(i, i + 16).map(t => t.toFixed(3)).join(" "));
+  }
+  return out;
+}
+
+document.getElementById("btnRec").onclick = () => recMode ? finishRec() : startRec();
+document.getElementById("padTap").onclick = tapBeat;
+document.getElementById("btnUndoTap").onclick = () => {
+  if (recMode){ recTaps.pop(); updateMapUI(); return; }
+  if (beatMap && beatMap.length > 2){ beatMap.pop(); updateMapUI(); syncRedraw(); }
+};
+document.getElementById("btnClearMap").onclick = () => {
+  beatMap = null; mapOn = false; updateMapUI(); syncRedraw();
+};
+document.getElementById("chkMap").onchange = e => {
+  mapOn = e.target.checked; syncRedraw();
+};
 
 /* ---------- テキストから合わせ情報を受け取る ---------- */
 function applyAlign(a){
@@ -1807,6 +2024,8 @@ function clearSong(){
   if (songURL){ URL.revokeObjectURL(songURL); songURL = null; }
   document.getElementById("syncBody").style.display = "none";
   songFileName = "";
+  if (recMode){ recMode = false; recTaps = []; }
+  beatMap = null; mapOn = false; updateMapUI();
   document.getElementById("songStat").textContent = "まだ読み込んでいません";
   document.getElementById("songInput").value = "";
 }
@@ -1890,6 +2109,7 @@ if (!restore()) { /* 保存が無ければ初期の例題のまま */ }
 setBpm(S.bpm);
 renderAll();
 applyVols();
+updateMapUI();
 lastSaved = serialize();
 fitTop();
 window.addEventListener("load", fitTop);
